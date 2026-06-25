@@ -1,0 +1,43 @@
+# Python cache and build output
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Streamlit local secrets
+.streamlit/secrets.toml
+.streamlit/*.toml
+!.streamlit/config.toml
+!.streamlit/secrets.example.toml
+
+# Runtime logs and local process output
+*.log
+streamlit.out.log
+streamlit.err.log
+
+# Local editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Codex/local workspace metadata
+.codex/
+.agents/
+
+# Keep required project data artifacts tracked intentionally:
+# segmentation_input_updated.csv
+# pca_5d_output.csv
+# pca_metadata.csv
+# mock_streamlit_kmeans_data.csv
