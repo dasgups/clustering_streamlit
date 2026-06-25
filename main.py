@@ -33,6 +33,10 @@ CUSTOMER_ID_COLUMNS = [
     "Customer ID",
 ]
 PCA_COLUMNS = ["PC1", "PC2", "PC3", "PC4", "PC5"]
+PRICING_MODEL_OPTIONS = [
+    "KMeans",
+    "Gaussian Mixture",
+]
 SILHOUETTE_SAMPLE_SIZE = 10_000
 KMEDOIDS_SAMPLE_SIZE = 20_000
 AGGLOMERATIVE_SAMPLE_SIZE = 15_000
@@ -188,8 +192,9 @@ def combine_original_and_pca_data(
             + ", ".join(missing_pca_columns)
         )
 
-    original_without_pca = original_df.drop(columns=PCA_COLUMNS, errors="ignore")
-    pca_columns = pca_df[PCA_COLUMNS].reset_index(drop=True)
+    available_pca_columns = get_available_pca_columns(pca_df)
+    original_without_pca = original_df.drop(columns=available_pca_columns, errors="ignore")
+    pca_columns = pca_df[available_pca_columns].reset_index(drop=True)
 
     return pd.concat(
         [original_without_pca.reset_index(drop=True), pca_columns],
@@ -281,13 +286,31 @@ def make_gaussian_mixture(n_clusters: int) -> GaussianMixture:
     )
 
 
-@st.cache_data(show_spinner=False)
-def run_analysis(df: pd.DataFrame, n_clusters: int) -> tuple[pd.DataFrame, float]:
-    reporting_df = df.copy()
-    pca_features = prepare_pca_features(reporting_df)
+def assign_cluster_labels(
+    model_name: str,
+    pca_features: pd.DataFrame,
+    n_clusters: int,
+) -> np.ndarray:
+    if model_name == "KMeans":
+        return make_kmeans(n_clusters).fit_predict(pca_features)
 
-    kmeans = make_kmeans(n_clusters)
-    labels = kmeans.fit_predict(pca_features)
+    if model_name == "Gaussian Mixture":
+        return make_gaussian_mixture(n_clusters).fit_predict(pca_features)
+
+    raise ValueError(f"Unsupported model: {model_name}")
+
+
+@st.cache_data(show_spinner=False)
+def run_analysis(
+    df: pd.DataFrame,
+    n_clusters: int,
+    model_name: str,
+    selected_pca_columns: tuple[str, ...],
+) -> tuple[pd.DataFrame, float]:
+    reporting_df = df.copy()
+    pca_features = prepare_pca_features(reporting_df, selected_pca_columns)
+
+    labels = assign_cluster_labels(model_name, pca_features, n_clusters)
     score = silhouette_for_labels(pca_features, labels)
 
     reporting_df["Cluster"] = labels
@@ -819,7 +842,7 @@ def load_pricing_source_data(uploaded_original_file, uploaded_pca_file) -> pd.Da
     return combine_original_and_pca_data(original_df, pca_df)
 
 
-def render_pricing_controls() -> tuple[object, object, int, bool]:
+def render_pricing_file_controls() -> tuple[object, object]:
     uploaded_original_file = st.sidebar.file_uploader(
         "Upload Original CSV",
         type=["csv"],
@@ -836,26 +859,56 @@ def render_pricing_controls() -> tuple[object, object, int, bool]:
             f"If no file is uploaded, the app uses `{PCA_DATA_PATH}`."
         ),
     )
+    return uploaded_original_file, uploaded_pca_file
+
+
+def render_pricing_run_controls(
+    available_pca_columns: list[str],
+) -> tuple[int, str, tuple[str, ...], bool]:
+    pca_component_options = list(range(5, len(available_pca_columns) + 1))
     n_clusters = st.sidebar.selectbox("Select Number of Clusters", [3, 4, 5], index=2)
+    model_name = st.sidebar.selectbox(
+        "Select Clustering Model",
+        PRICING_MODEL_OPTIONS,
+        help=(
+            "Choose the model used to assign customer clusters for the Pricing "
+            "dashboard report."
+        ),
+    )
+    pca_component_count = st.sidebar.selectbox(
+        "Select PCA Dimensions",
+        pca_component_options,
+        index=0,
+        help=(
+            "Choose how many saved PCA component columns to use for clustering. "
+            "Pricing requires at least PC1 through PC5."
+        ),
+    )
+    selected_pca_columns = tuple(available_pca_columns[:pca_component_count])
     run_analysis_clicked = st.sidebar.button("Run Analysis", type="primary")
-    return uploaded_original_file, uploaded_pca_file, n_clusters, run_analysis_clicked
+    return n_clusters, model_name, selected_pca_columns, run_analysis_clicked
 
 
 def get_or_run_pricing_analysis(
     source_df: pd.DataFrame,
     n_clusters: int,
+    model_name: str,
+    selected_pca_columns: tuple[str, ...],
     run_analysis_clicked: bool,
-) -> tuple[pd.DataFrame, int, float | None]:
+) -> tuple[pd.DataFrame, int, str, tuple[str, ...], float | None]:
     source_signature = dataframe_signature(source_df)
     analysis_is_stale = (
         "analysis_df" not in st.session_state
         or st.session_state.get("n_clusters") != n_clusters
+        or st.session_state.get("pricing_model_name") != model_name
+        or st.session_state.get("pricing_pca_columns") != selected_pca_columns
         or st.session_state.get("source_signature") != source_signature
     )
 
     if not run_analysis_clicked and "analysis_df" not in st.session_state:
         st.info(
-            "Choose a cluster count in the sidebar and run the analysis. "
+            "Choose a cluster count, model, and PCA dimension count in the sidebar, "
+            "then run the analysis. "
             f"The app uses `{ORIGINAL_DATA_PATH}` plus `{PCA_DATA_PATH}` by default, "
             "or the uploaded original and PCA output CSV files."
         )
@@ -863,22 +916,37 @@ def get_or_run_pricing_analysis(
         st.stop()
 
     if run_analysis_clicked or analysis_is_stale:
-        with st.spinner("Running KMeans clustering and rebate analysis from saved PCA output..."):
-            analysis_df, active_silhouette_score = run_analysis(source_df, n_clusters)
+        with st.spinner(
+            "Running clustering and rebate analysis from saved PCA output..."
+        ):
+            analysis_df, active_silhouette_score = run_analysis(
+                source_df,
+                n_clusters,
+                model_name,
+                selected_pca_columns,
+            )
 
         st.session_state["analysis_df"] = analysis_df
         st.session_state["silhouette_score"] = active_silhouette_score
         st.session_state["n_clusters"] = n_clusters
+        st.session_state["pricing_model_name"] = model_name
+        st.session_state["pricing_pca_columns"] = selected_pca_columns
         st.session_state["source_signature"] = source_signature
 
     return (
         st.session_state["analysis_df"],
         st.session_state["n_clusters"],
+        st.session_state["pricing_model_name"],
+        st.session_state["pricing_pca_columns"],
         st.session_state.get("silhouette_score"),
     )
 
 
-def render_cluster_analysis_tab(analysis_df: pd.DataFrame) -> None:
+def render_cluster_analysis_tab(
+    analysis_df: pd.DataFrame,
+    model_name: str,
+    selected_pca_columns: tuple[str, ...],
+) -> None:
     st.subheader("Cluster Statistics")
     cluster_statistics_df = build_cluster_statistics(analysis_df)
     st.dataframe(
@@ -887,7 +955,8 @@ def render_cluster_analysis_tab(analysis_df: pd.DataFrame) -> None:
     )
 
     st.caption(
-        "Cluster labels are generated from saved PC1-PC5 values. "
+        "Cluster labels are generated from saved PCA values using "
+        f"{model_name} across {', '.join(selected_pca_columns)}. "
         "Statistics, rebate analysis, and boxplots use the original unscaled business columns; "
         "PCA values are not used in the cluster summaries."
     )
@@ -937,12 +1006,7 @@ def render_pricing_dashboard(authenticator, signed_in_name: str) -> None:
         authenticator,
         "pricing_team_logout",
     )
-    (
-        uploaded_original_file,
-        uploaded_pca_file,
-        n_clusters,
-        run_analysis_clicked,
-    ) = render_pricing_controls()
+    uploaded_original_file, uploaded_pca_file = render_pricing_file_controls()
 
     try:
         source_df = load_pricing_source_data(uploaded_original_file, uploaded_pca_file)
@@ -956,6 +1020,15 @@ def render_pricing_dashboard(authenticator, signed_in_name: str) -> None:
         st.error(f"Could not load or combine the CSV files: {exc}")
         st.stop()
 
+    available_pca_columns = get_available_pca_columns(source_df)
+    if len(available_pca_columns) < len(PCA_COLUMNS):
+        st.error(
+            "The PCA output must include at least "
+            + ", ".join(f"`{column}`" for column in PCA_COLUMNS)
+            + "."
+        )
+        st.stop()
+
     missing_columns = validate_input(source_df)
     if missing_columns:
         st.error(
@@ -964,9 +1037,25 @@ def render_pricing_dashboard(authenticator, signed_in_name: str) -> None:
         )
         st.stop()
 
+    n_clusters, model_name, selected_pca_columns, run_analysis_clicked = (
+        render_pricing_run_controls(available_pca_columns)
+    )
+
     try:
-        analysis_df, active_cluster_count, active_silhouette_score = (
-            get_or_run_pricing_analysis(source_df, n_clusters, run_analysis_clicked)
+        (
+            analysis_df,
+            active_cluster_count,
+            active_model_name,
+            active_pca_columns,
+            active_silhouette_score,
+        ) = (
+            get_or_run_pricing_analysis(
+                source_df,
+                n_clusters,
+                model_name,
+                selected_pca_columns,
+                run_analysis_clicked,
+            )
         )
     except Exception as exc:
         st.error(f"Analysis failed: {exc}")
@@ -981,13 +1070,16 @@ def render_pricing_dashboard(authenticator, signed_in_name: str) -> None:
     silhouette_text = ""
     if active_silhouette_score is not None:
         silhouette_text = f" | Silhouette score: {active_silhouette_score:.3f}"
-    st.caption(f"Current analysis uses {active_cluster_count} clusters{silhouette_text}.")
+    st.caption(
+        f"Current analysis uses {active_model_name}, {active_cluster_count} clusters, "
+        f"and {len(active_pca_columns)} PCA dimensions{silhouette_text}."
+    )
     render_metric_cards(analysis_df)
 
     tab1, tab2 = st.tabs(["Cluster Analysis", "Rebate Opportunity Report"])
 
     with tab1:
-        render_cluster_analysis_tab(analysis_df)
+        render_cluster_analysis_tab(analysis_df, active_model_name, active_pca_columns)
 
     with tab2:
         render_opportunity_report_tab(analysis_df, selected_cluster)

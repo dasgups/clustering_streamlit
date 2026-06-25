@@ -30,16 +30,16 @@ Build a Streamlit application for customer rebate optimization.
 
 The app will help business users identify customers receiving higher rebates than comparable customers in the same cluster. These customers will be flagged as renewal targets so rebates can be revised and unnecessary spend can be reduced.
 
-The app should stay lightweight during user interaction. It should only rerun KMeans and rebate calculations when the selected cluster count or input dataset changes.
+The app should stay lightweight during user interaction. It should only rerun clustering and rebate calculations when the selected model, cluster count, PCA dimension count, or input dataset changes.
 
 Use Streamlit caching where applicable:
 
 * Cache default CSV loading with `st.cache_data`.
 * Cache uploaded CSV parsing with `st.cache_data`.
 * Cache original/PCA dataframe combining with `st.cache_data`.
-* Cache KMeans/rebate analysis results with `st.cache_data`, keyed by dataset contents and cluster count.
+* Cache clustering/rebate analysis results with `st.cache_data`, keyed by dataset contents, model, cluster count, and selected PCA component columns.
 * Do not cache mutable fitted sklearn model objects with `st.cache_resource`; create fresh estimator instances before fitting.
-* Do not rerun analysis for unchanged datasets and unchanged cluster counts.
+* Do not rerun analysis for unchanged datasets, model choices, PCA dimension counts, and cluster counts.
 
 Streamlit application code is in:
 
@@ -219,7 +219,7 @@ Steps:
 5. Run PCA.
 6. Save at least the first five principal components and continue through the component that reaches at least 90% cumulative explained variance in `pca_5d_output.csv`.
 
-During Pricing Team Streamlit interaction, use the saved `PC1` through `PC5` columns directly for clustering. During Data Science Team model comparison, allow the user to choose how many available PCA components to include.
+During Pricing Team Streamlit interaction, use saved `PC*` columns directly for clustering, with `PC1` through `PC5` as the minimum and a user-selected component count when more prepared components are available. During Data Science Team model comparison, allow the user to choose how many available PCA components to include.
 
 ---
 
@@ -304,15 +304,21 @@ Also save `pca_metadata.csv` with component-level and cumulative explained varia
 
 ---
 
-## 7. KMeans Clustering
+## 7. Pricing Clustering
 
-Run KMeans on:
+Run the selected clustering model on at least:
 
 ```text
 PC1, PC2, PC3, PC4, PC5
 ```
 
-The user should be able to select the number of clusters from:
+The user should be able to select the clustering model, PCA dimension count, and number of clusters. Pricing model options should be full-dataset models that return one label per customer:
+
+```text
+KMeans, Gaussian Mixture
+```
+
+Cluster count options are:
 
 ```text
 3, 4, 5
@@ -327,7 +333,7 @@ n_clusters = st.sidebar.selectbox(
 )
 ```
 
-Use:
+For KMeans, use:
 
 ```python
 kmeans = KMeans(
@@ -339,7 +345,7 @@ kmeans = KMeans(
 
 Attach cluster labels back to the original dataframe.
 
-Calculate the silhouette score on the same `PC1` through `PC5` matrix used for KMeans. Show it only as a small reference caption, not as a prominent KPI card.
+Calculate the silhouette score on the same selected PCA matrix used for clustering. Show it only as a small reference caption, not as a prominent KPI card.
 
 For large datasets, calculate silhouette on a fixed random sample to keep interactions responsive.
 
@@ -474,14 +480,16 @@ Data Science Team users should see a diagnostics dashboard that:
 The sidebar should include:
 
 1. Cluster count selector.
-2. Run analysis button.
-3. Optional original CSV uploader.
-4. Optional PCA output CSV uploader.
-5. Optional filters for cluster or customer segment.
+2. Clustering model selector.
+3. PCA dimension count selector.
+4. Run analysis button.
+5. Optional original CSV uploader.
+6. Optional PCA output CSV uploader.
+7. Optional filters for cluster or customer segment.
 
 The original uploader should accept the unscaled business file. If no original file is uploaded, use `segmentation_input_updated.csv`.
 
-The PCA uploader should accept prepared PCA output files containing `PC*` component columns. Pricing requires at least `PC1` through `PC5`. If no PCA file is uploaded, use `pca_5d_output.csv`.
+The PCA uploader should accept prepared PCA output files containing `PC*` component columns. Pricing requires at least `PC1` through `PC5`, and should expose higher available dimensions when the PCA file contains additional prepared `PC*` columns. If no PCA file is uploaded, use `pca_5d_output.csv`.
 
 In the Data Science dashboard, a replacement PCA upload can be paired with an optional replacement metadata CSV. If a replacement PCA file is uploaded without metadata, do not show default explained-variance metadata as if it belonged to the uploaded file.
 
@@ -688,8 +696,8 @@ st.download_button(
 2. The builder creates or refreshes `pca_5d_output.csv`.
 3. User opens the Streamlit app with `streamlit run main.py`.
 4. App loads `segmentation_input_updated.csv` and `pca_5d_output.csv`, unless the user uploads replacement files.
-5. User selects number of clusters: 3, 4, or 5.
-6. App runs KMeans on `PC1` through `PC5`.
+5. User selects model, PCA dimensions, and number of clusters: 3, 4, or 5.
+6. App runs the selected clustering model on the selected saved PCA dimensions.
 7. App displays cluster statistics, cluster characteristics, and boxplots from the original unscaled business columns in Tab 1.
 8. App displays rebate gap, outlier customers, and financial opportunity in Tab 2.
 9. User downloads the opportunity report.
@@ -706,14 +714,14 @@ st.download_button(
 * Use `segmentation_input_updated.csv` and `pca_5d_output.csv` as the default app inputs to `main.py`.
 * If files are uploaded in the app, the original file must be unscaled business data and the PCA file must already contain enough `PC*` component columns for the selected workflow.
 * Uploaded original and PCA files must have the same number of rows and be in the same row order.
-* Put Streamlit UI, KMeans clustering, rebate analysis, charts, and downloads inside `main.py`.
+* Put Streamlit UI, clustering, rebate analysis, charts, and downloads inside `main.py`.
 * Put preprocessing, encoding, scaling, and PCA generation inside `build_pca_output.py`.
 * Do not rerun preprocessing, encoding, scaling, or PCA inside `main.py`.
 * Preserve the original dataframe for reporting.
 * Do not cluster on customer ID, customer name, parent name, or other identifier columns.
 * For now, `parent_name` or `customer_name` should populate `Customer Name` in the target report because customer name is unique. If a real ID field is added later, use it for a separate `Customer_ID` column.
 * PCA component columns must be numeric and non-missing. Do not silently convert malformed PCA values to zero inside `main.py`.
-* Use PCA components `PC1` through `PC5` for KMeans.
+* Use saved PCA component columns for clustering. Pricing must always include at least `PC1` through `PC5`; if more `PC*` columns exist, let the user choose the component count.
 * Allow only 3, 4, or 5 clusters.
 * After cluster labels are generated, calculate cluster analysis, rebate statistics, and boxplots against original unscaled business columns, not transformed or PCA values.
 * Do not show PCA values directly in Tab 1 unless explicitly requested later.
@@ -728,7 +736,7 @@ st.download_button(
 
 * Authentication helpers: `to_plain_dict()`, `get_authenticator()`, and `require_login()`.
 * Data loading and validation helpers: `load_csv()`, `combine_original_and_pca_data()`, `validate_input()`, and `prepare_pca_features()`.
-* Pricing workflow helpers: `render_pricing_dashboard()`, `render_pricing_controls()`, `get_or_run_pricing_analysis()`, `render_cluster_analysis_tab()`, and `render_opportunity_report_tab()`.
+* Pricing workflow helpers: `render_pricing_dashboard()`, `render_pricing_file_controls()`, `render_pricing_run_controls()`, `get_or_run_pricing_analysis()`, `render_cluster_analysis_tab()`, and `render_opportunity_report_tab()`.
 * Data Science workflow helpers: `render_data_science_dashboard()`, `run_data_science_models()`, and `evaluate_data_science_model()`.
 
 Keep future changes inside these helpers where practical instead of adding new top-level procedural blocks at the bottom of `main.py`.
@@ -743,7 +751,7 @@ The final Streamlit app should:
 2. Load `segmentation_input_updated.csv` and `pca_5d_output.csv` by default, with optional upload paths for replacement original and PCA output CSV files.
 3. Avoid rerunning preprocessing and PCA during Streamlit interactions.
 4. Allow the user to choose 3, 4, or 5 clusters.
-5. Generate customer clusters using KMeans on `PC1` through `PC5`.
+5. Allow the user to choose the clustering model and number of saved PCA dimensions used for Pricing clustering.
 6. Show silhouette score as a small reference.
 7. Show cluster statistics in Tab 1.
 8. Show a cluster characteristics expander in Tab 1.
