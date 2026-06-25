@@ -30,7 +30,7 @@ Build a Streamlit application for customer rebate optimization.
 
 The app will help business users identify customers receiving higher rebates than comparable customers in the same cluster. These customers will be flagged as renewal targets so rebates can be revised and unnecessary spend can be reduced.
 
-The app should stay lightweight during user interaction. It should only rerun KMeans and rebate calculations when the selected cluster count changes.
+The app should stay lightweight during user interaction. It should only rerun KMeans and rebate calculations when the selected cluster count or input dataset changes.
 
 Use Streamlit caching where applicable:
 
@@ -38,7 +38,7 @@ Use Streamlit caching where applicable:
 * Cache uploaded CSV parsing with `st.cache_data`.
 * Cache original/PCA dataframe combining with `st.cache_data`.
 * Cache KMeans/rebate analysis results with `st.cache_data`, keyed by dataset contents and cluster count.
-* Cache reusable model resources with `st.cache_resource` where safe.
+* Do not cache mutable fitted sklearn model objects with `st.cache_resource`; create fresh estimator instances before fitting.
 * Do not rerun analysis for unchanged datasets and unchanged cluster counts.
 
 Streamlit application code is in:
@@ -113,6 +113,7 @@ segmentation_input_updated.csv
 pca_5d_output.csv
 pca_metadata.csv
 AGENTS.md
+.gitignore
 ```
 
 All Streamlit UI, KMeans clustering, rebate calculations, charts, and report generation should be implemented inside:
@@ -140,10 +141,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from sklearn.cluster import KMeans
+from sklearn.cluster import AgglomerativeClustering, KMeans
+from sklearn.mixture import GaussianMixture
+from sklearn.metrics import pairwise_distances, silhouette_score
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+```
+
+`main.py` also uses:
+
+```python
+import streamlit_authenticator as stauth
 ```
 
 ## `build_pca_output.py` Required Libraries
@@ -454,7 +463,7 @@ Data Science Team users should see a diagnostics dashboard that:
 * Shows explained variance from `pca_metadata.csv`.
 * Allows the user to select cluster counts.
 * Allows the user to select how many PCA components to include in model comparison.
-* Runs KMeans and Gaussian Mixture models for selected cluster counts.
+* Runs selected model comparisons for KMeans, Gaussian Mixture, local KMedoids, and Agglomerative Clustering.
 * Shows a results table with cluster size, model name, cluster count, PCA component count, and silhouette score.
 * Preserves past model score rows while the PCA output file is unchanged.
 * Clears stored model scores automatically when the PCA output changes, and provide a manual clear button.
@@ -706,6 +715,19 @@ st.download_button(
 * Do not show PCA values directly in Tab 1 unless explicitly requested later.
 * Use cluster median rebate as the benchmark.
 * Outlier customers are the target customers for renewal rebate revision.
+* Keep `.streamlit/secrets.toml`, `__pycache__/`, local Streamlit logs, and `.venv/` out of git. They are ignored in `.gitignore`.
+* If authentication settings need to be shared, create a redacted example file rather than committing real secrets or password hashes.
+
+## Current Code Organization
+
+`main.py` is organized around small helper functions:
+
+* Authentication helpers: `to_plain_dict()`, `get_authenticator()`, and `require_login()`.
+* Data loading and validation helpers: `load_csv()`, `combine_original_and_pca_data()`, `validate_input()`, and `prepare_pca_features()`.
+* Pricing workflow helpers: `render_pricing_dashboard()`, `render_pricing_controls()`, `get_or_run_pricing_analysis()`, `render_cluster_analysis_tab()`, and `render_opportunity_report_tab()`.
+* Data Science workflow helpers: `render_data_science_dashboard()`, `run_data_science_models()`, and `evaluate_data_science_model()`.
+
+Keep future changes inside these helpers where practical instead of adding new top-level procedural blocks at the bottom of `main.py`.
 
 ---
 
@@ -727,7 +749,7 @@ The final Streamlit app should:
 12. Show financial opportunity.
 13. Allow download of the target customer report.
 14. Route Data Science Team users to PCA/model diagnostics.
-15. Show Data Science model comparison results for KMeans and Gaussian Mixture.
+15. Show Data Science model comparison results for KMeans, Gaussian Mixture, local KMedoids, and Agglomerative Clustering when selected.
 
 The final preprocessing workflow should:
 
