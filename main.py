@@ -21,7 +21,17 @@ PCA_DATA_PATH = "pca_5d_output.csv"
 PCA_METADATA_PATH = "pca_metadata.csv"
 REBATE_COL = "overall_median_rebate_cpl"
 VOLUME_COL = "total_vol"
-CUSTOMER_COL = "parent_name"
+CUSTOMER_NAME_COLUMNS = [
+    "customer_name",
+    "Customer Name",
+    "parent_name",
+    "Parent Name",
+]
+CUSTOMER_ID_COLUMNS = [
+    "Customer_ID",
+    "customer_id",
+    "Customer ID",
+]
 PCA_COLUMNS = ["PC1", "PC2", "PC3", "PC4", "PC5"]
 SILHOUETTE_SAMPLE_SIZE = 10_000
 KMEDOIDS_SAMPLE_SIZE = 20_000
@@ -188,8 +198,23 @@ def combine_original_and_pca_data(
 
 
 def validate_input(df: pd.DataFrame) -> list[str]:
-    required_columns = [CUSTOMER_COL, REBATE_COL, VOLUME_COL] + PCA_COLUMNS
-    return [column for column in required_columns if column not in df.columns]
+    required_columns = [REBATE_COL, VOLUME_COL] + PCA_COLUMNS
+    missing_columns = [column for column in required_columns if column not in df.columns]
+    if not get_customer_name_column(df):
+        missing_columns.append("customer_name or parent_name")
+    return missing_columns
+
+
+def get_first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    return next((column for column in candidates if column in df.columns), None)
+
+
+def get_customer_name_column(df: pd.DataFrame) -> str | None:
+    return get_first_existing_column(df, CUSTOMER_NAME_COLUMNS)
+
+
+def get_customer_id_column(df: pd.DataFrame) -> str | None:
+    return get_first_existing_column(df, CUSTOMER_ID_COLUMNS)
 
 
 def get_available_pca_columns(df: pd.DataFrame) -> list[str]:
@@ -225,9 +250,20 @@ def prepare_pca_features(
         )
 
     pca_features = df[list(selected_pca_columns)].copy()
+    invalid_columns = []
     for column in selected_pca_columns:
-        pca_features[column] = pd.to_numeric(pca_features[column], errors="coerce")
-    return pca_features.replace([np.inf, -np.inf], np.nan).fillna(0)
+        numeric_values = pd.to_numeric(pca_features[column], errors="coerce")
+        if numeric_values.replace([np.inf, -np.inf], np.nan).isna().any():
+            invalid_columns.append(column)
+        pca_features[column] = numeric_values
+
+    if invalid_columns:
+        raise ValueError(
+            "PCA component columns must contain only numeric, non-missing values. "
+            "Check: " + ", ".join(invalid_columns)
+        )
+
+    return pca_features
 
 
 def make_kmeans(n_clusters: int) -> KMeans:
@@ -509,10 +545,11 @@ def add_rebate_analysis(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_cluster_statistics(df: pd.DataFrame) -> pd.DataFrame:
+    customer_name_column = get_customer_name_column(df)
     grouped = df.groupby("Cluster")
 
     stats = grouped.agg(
-        Customer_Count=(CUSTOMER_COL, "count"),
+        Customer_Count=(customer_name_column, "count"),
         Median_Rebate=(REBATE_COL, "median"),
         Mean_Rebate=(REBATE_COL, "mean"),
         Minimum_Rebate=(REBATE_COL, "min"),
@@ -625,6 +662,7 @@ def render_cluster_characteristics(df: pd.DataFrame) -> None:
 
 def build_opportunity_summary(df: pd.DataFrame) -> pd.DataFrame:
     targets = df[df["rebate_flag"] == "Over Rebated"].copy()
+    customer_name_column = get_customer_name_column(df)
     if targets.empty:
         return pd.DataFrame(
             columns=[
@@ -638,7 +676,7 @@ def build_opportunity_summary(df: pd.DataFrame) -> pd.DataFrame:
 
     summary = targets.groupby("Cluster").agg(
         **{
-            "Number of Outlier Customers": (CUSTOMER_COL, "count"),
+            "Number of Outlier Customers": (customer_name_column, "count"),
             "Total Financial Opportunity": ("rebate_opportunity_gbp", "sum"),
             "Average Rebate Gap": ("rebate_gap_cpl", "mean"),
             "Median Cluster Rebate": ("cluster_benchmark_cpl", "median"),
@@ -650,11 +688,15 @@ def build_opportunity_summary(df: pd.DataFrame) -> pd.DataFrame:
 def build_target_customer_table(df: pd.DataFrame) -> pd.DataFrame:
     targets = df[df["rebate_flag"] == "Over Rebated"].copy()
     targets = targets.sort_values("rebate_opportunity_gbp", ascending=False)
+    customer_name_column = get_customer_name_column(targets)
+    customer_id_column = get_customer_id_column(targets)
 
-    report = pd.DataFrame(
+    report_columns = {}
+    if customer_id_column:
+        report_columns["Customer_ID"] = targets[customer_id_column]
+    report_columns["Customer Name"] = targets[customer_name_column]
+    report_columns.update(
         {
-            "Customer ID": targets[CUSTOMER_COL],
-            "Customer Name": targets[CUSTOMER_COL],
             "Cluster": targets["Cluster"],
             "Current Rebate": targets[REBATE_COL],
             "Cluster Median Rebate": targets["cluster_benchmark_cpl"],
@@ -663,6 +705,8 @@ def build_target_customer_table(df: pd.DataFrame) -> pd.DataFrame:
             "Outlier Flag": targets["rebate_flag"],
         }
     )
+
+    report = pd.DataFrame(report_columns)
     return report.round(2)
 
 
@@ -968,6 +1012,14 @@ def render_data_science_dashboard(authenticator, signed_in_name: str) -> None:
             f"If no file is uploaded, the app uses `{PCA_DATA_PATH}`."
         ),
     )
+    uploaded_metadata_file = st.sidebar.file_uploader(
+        "Upload PCA Metadata CSV",
+        type=["csv"],
+        help=(
+            "Optional. Upload matching PCA metadata with explained variance columns. "
+            f"If no custom PCA output is uploaded, the app uses `{PCA_METADATA_PATH}`."
+        ),
+    )
 
     try:
         pca_df = load_csv(uploaded_pca_file, load_default_pca_data, PCA_DATA_PATH)
@@ -988,15 +1040,29 @@ def render_data_science_dashboard(authenticator, signed_in_name: str) -> None:
         st.stop()
 
     metadata_df = pd.DataFrame()
-    try:
-        metadata_df = load_default_pca_metadata(*file_cache_key(PCA_METADATA_PATH))
-    except FileNotFoundError:
+    if uploaded_metadata_file is not None:
+        try:
+            metadata_df = load_uploaded_csv(
+                uploaded_metadata_file.name,
+                uploaded_metadata_file.getvalue(),
+            )
+        except Exception as exc:
+            st.warning(f"Could not load uploaded PCA metadata: {exc}")
+    elif uploaded_pca_file is None:
+        try:
+            metadata_df = load_default_pca_metadata(*file_cache_key(PCA_METADATA_PATH))
+        except FileNotFoundError:
+            st.warning(
+                f"`{PCA_METADATA_PATH}` was not found. Run `python build_pca_output.py` "
+                "to refresh explained variance metadata."
+            )
+        except Exception as exc:
+            st.warning(f"Could not load PCA metadata: {exc}")
+    else:
         st.warning(
-            f"`{PCA_METADATA_PATH}` was not found. Run `python build_pca_output.py` "
-            "to refresh explained variance metadata."
+            "Uploaded PCA output is being used without matching PCA metadata. "
+            "Explained variance is unavailable for this uploaded file."
         )
-    except Exception as exc:
-        st.warning(f"Could not load PCA metadata: {exc}")
 
     component_count = len(available_pca_columns)
     if not metadata_df.empty and "Explained Variance Ratio" in metadata_df.columns:

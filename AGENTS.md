@@ -461,6 +461,7 @@ Data Science Team users should see a diagnostics dashboard that:
 * Loads `pca_5d_output.csv`.
 * Shows number of PCA components.
 * Shows explained variance from `pca_metadata.csv`.
+* Allows an optional matching PCA metadata upload when a replacement PCA output is uploaded.
 * Allows the user to select cluster counts.
 * Allows the user to select how many PCA components to include in model comparison.
 * Runs selected model comparisons for KMeans, Gaussian Mixture, local KMedoids, and Agglomerative Clustering.
@@ -481,6 +482,8 @@ The sidebar should include:
 The original uploader should accept the unscaled business file. If no original file is uploaded, use `segmentation_input_updated.csv`.
 
 The PCA uploader should accept prepared PCA output files containing `PC*` component columns. Pricing requires at least `PC1` through `PC5`. If no PCA file is uploaded, use `pca_5d_output.csv`.
+
+In the Data Science dashboard, a replacement PCA upload can be paired with an optional replacement metadata CSV. If a replacement PCA file is uploaded without metadata, do not show default explained-variance metadata as if it belonged to the uploaded file.
 
 Example:
 
@@ -628,7 +631,6 @@ Show all outlier customers across every cluster.
 Required columns:
 
 ```text
-Customer ID
 Customer Name
 Cluster
 Current Rebate
@@ -638,7 +640,7 @@ Financial Opportunity
 Outlier Flag
 ```
 
-Use the actual column names from the CSV where different.
+Use the actual column names from the CSV where different. For the current mock data, customer name is unique and is the customer key for the report. If a real customer ID field is added later, route that field to a `Customer_ID` report column and keep `Customer Name` as the readable customer label.
 
 Sort by:
 
@@ -708,7 +710,9 @@ st.download_button(
 * Put preprocessing, encoding, scaling, and PCA generation inside `build_pca_output.py`.
 * Do not rerun preprocessing, encoding, scaling, or PCA inside `main.py`.
 * Preserve the original dataframe for reporting.
-* Do not cluster on customer ID, customer name, or other identifier columns.
+* Do not cluster on customer ID, customer name, parent name, or other identifier columns.
+* For now, `parent_name` or `customer_name` should populate `Customer Name` in the target report because customer name is unique. If a real ID field is added later, use it for a separate `Customer_ID` column.
+* PCA component columns must be numeric and non-missing. Do not silently convert malformed PCA values to zero inside `main.py`.
 * Use PCA components `PC1` through `PC5` for KMeans.
 * Allow only 3, 4, or 5 clusters.
 * After cluster labels are generated, calculate cluster analysis, rebate statistics, and boxplots against original unscaled business columns, not transformed or PCA values.

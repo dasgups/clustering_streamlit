@@ -15,6 +15,15 @@ MIN_COMPONENTS = 5
 
 EXCLUDED_CLUSTERING_COLUMNS = [
     "parent_name",
+    "Parent Name",
+    "customer_name",
+    "Customer Name",
+    "customer_id",
+    "Customer ID",
+    "Customer_ID",
+    "parent_id",
+    "Parent ID",
+    "Cluster",
     "supplied_by_bp_median_rebate_cpl",
     "non_supplied_by_bp_median_rebate_cpl",
     "non_street_heavy_sites_median_rebate_cpl",
@@ -23,6 +32,12 @@ EXCLUDED_CLUSTERING_COLUMNS = [
     "bp_heavy_sites_median_rebate_cpl",
     "overall_median_rebate_cpl",
     "total_rebate_amount",
+    "Financial Opportunity",
+    "financial_opportunity",
+    "rebate_gap_cpl",
+    "rebate_opportunity_gbp",
+    "rebate_flag",
+    "z_score",
 ]
 
 
